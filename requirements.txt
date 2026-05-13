@@ -1,5 +1,5 @@
 python-telegram-bot==20.7
-anthropic
-yt-dlp
-pillow
 python-dotenv
+yt-dlp
+anthropic
+Pillow
