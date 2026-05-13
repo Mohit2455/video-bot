@@ -1,0 +1,5 @@
+python-telegram-bot
+anthropic
+yt-dlp
+pillow
+python-dotenv
