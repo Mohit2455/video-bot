@@ -25,7 +25,7 @@ CLIENT_ID  = int(os.getenv("CLIENT_ID"))
 CLAUDE_KEY = os.getenv("CLAUDE_KEY")
 ALLOWED    = {MY_ID, CLIENT_ID}
 
-TMP_DIR      = os.path.join(os.environ.get("TEMP", "C:\\temp"), "videobot")
+TMP_DIR = "/tmp/videobot"
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.json")
 os.makedirs(TMP_DIR, exist_ok=True)
 
