@@ -19,11 +19,13 @@ from telegram.ext import (
 
 # ── Load env
 load_dotenv()
-BOT_TOKEN  = os.getenv("BOT_TOKEN")
-MY_ID      = int(os.getenv("MY_ID"))
-CLIENT_ID  = int(os.getenv("CLIENT_ID"))
-CLAUDE_KEY = os.getenv("CLAUDE_KEY")
-ALLOWED    = {MY_ID, CLIENT_ID}
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+MY_ID = int(os.environ["MY_ID"])
+CLIENT_ID = int(os.environ["CLIENT_ID"])
+CLAUDE_KEY = os.environ["CLAUDE_KEY"]
+print("BOT:", BOT_TOKEN[:10])
+print("MY_ID:", MY_ID)
+print("CLIENT_ID:", CLIENT_ID)
 
 TMP_DIR = "/tmp/videobot"
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.json")
