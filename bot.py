@@ -23,12 +23,13 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 MY_ID = int(os.environ["MY_ID"])
 CLIENT_ID = int(os.environ["CLIENT_ID"])
 CLAUDE_KEY = os.environ["CLAUDE_KEY"]
-print("BOT:", BOT_TOKEN[:10])
-print("MY_ID:", MY_ID)
-print("CLIENT_ID:", CLIENT_ID)
+
+# ✅ FIX 1: ALLOWED set properly define kiya
+ALLOWED = {MY_ID, CLIENT_ID}
 
 TMP_DIR = "/tmp/videobot"
-COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.json")
+# ✅ FIX 2: cookies.txt (Netscape format) use karo, cookies.json nahi
+COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
 os.makedirs(TMP_DIR, exist_ok=True)
 
 WAIT_CAPTION = 1
@@ -59,7 +60,11 @@ def download_video(url, out_dir):
         "format": "best[ext=mp4]/best",
         "outtmpl": os.path.join(out_dir, "input.%(ext)s"),
         "merge_output_format": "mp4",
-        "quiet": True,
+        "quiet": False,
+        # ✅ FIX 3: Instagram ke liye extra headers
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15",
+        },
     }
     if ("instagram.com" in url or "tiktok.com" in url) and os.path.exists(COOKIES_FILE):
         opts["cookiefile"] = COOKIES_FILE
@@ -96,12 +101,13 @@ def make_banner(path, w, h, caption=None):
         draw      = ImageDraw.Draw(img)
         font_size = max(42, w // 17)
 
-        # Try emoji font first, then bold, then default
+        # ✅ FIX 4: Linux fonts use karo (Railway Linux pe run hota hai)
         font = None
         for font_path in [
-            "C:/Windows/Fonts/seguiemj.ttf",
-            "C:/Windows/Fonts/NotoColorEmoji.ttf",
-            "C:/Windows/Fonts/arialbd.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+            "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
         ]:
             try:
                 font = ImageFont.truetype(font_path, font_size)
@@ -134,14 +140,13 @@ def process_video_file(video_path, caption, out_path):
     make_banner(top_path, w, top_h, caption=caption)
     make_banner(bot_path, w, bot_h, caption=None)
 
-    # Black bars hatao + white banners lagao
     filter_complex = (
         f"[0:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
         f"pad={w}:{h}:-1:-1:color=white,setsar=1[vid];"
         f"[1:v]scale={w}:{top_h}:force_original_aspect_ratio=disable[top];"
         f"[2:v]scale={w}:{bot_h}:force_original_aspect_ratio=disable[bot];"
         f"[top][vid][bot]vstack=inputs=3[out]"
-)
+    )
 
     subprocess.run([
         "ffmpeg", "-y",
