@@ -101,13 +101,13 @@ def make_banner(path, w, h, caption=None):
         draw      = ImageDraw.Draw(img)
         font_size = max(42, w // 17)
 
-        # ✅ FIX 4: Linux fonts use karo (Railway Linux pe run hota hai)
+        # ✅ FIX 4: Linux fonts — Noto Color Emoji pehle (color emoji support)
         font = None
         for font_path in [
+            "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
             "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-            "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
         ]:
             try:
                 font = ImageFont.truetype(font_path, font_size)
@@ -148,7 +148,8 @@ def process_video_file(video_path, caption, out_path):
         f"[top][vid][bot]vstack=inputs=3[out]"
     )
 
-    subprocess.run([
+    # ✅ FIX 5: ffmpeg error ab dikhega — stderr capture kiya
+    result = subprocess.run([
         "ffmpeg", "-y",
         "-i", video_path,
         "-i", top_path,
@@ -161,7 +162,10 @@ def process_video_file(video_path, caption, out_path):
         "-preset", "ultrafast",
         "-crf", "28",
         out_path
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+    if result.returncode != 0:
+        raise Exception(f"FFmpeg error:\n{result.stderr.decode()}")
 
 
 # ── HANDLERS
