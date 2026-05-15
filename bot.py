@@ -131,8 +131,14 @@ def make_banner(path, w, h, caption=None):
 def process_video_file(video_path, caption, out_path):
     w, h = get_video_info(video_path)
 
-    top_h = int(h * 0.22)   # Upar — caption yahan
-    bot_h = int(h * 0.10)   # Neeche — empty white
+    top_h = int(h * 0.22)
+    bot_h = int(h * 0.10)
+
+    # ✅ FIX: width/height even honi chahiye (x264 requirement)
+    w     = w     if w     % 2 == 0 else w + 1
+    h     = h     if h     % 2 == 0 else h + 1
+    top_h = top_h if top_h % 2 == 0 else top_h + 1
+    bot_h = bot_h if bot_h % 2 == 0 else bot_h + 1
 
     top_path = os.path.join(TMP_DIR, "top.png")
     bot_path = os.path.join(TMP_DIR, "bot.png")
@@ -148,7 +154,6 @@ def process_video_file(video_path, caption, out_path):
         f"[top][vid][bot]vstack=inputs=3[out]"
     )
 
-    # ✅ FIX 5: ffmpeg error ab dikhega — stderr capture kiya
     result = subprocess.run([
         "ffmpeg", "-y",
         "-i", video_path,
@@ -165,7 +170,9 @@ def process_video_file(video_path, caption, out_path):
     ], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
     if result.returncode != 0:
-        raise Exception(f"FFmpeg error:\n{result.stderr.decode()}")
+        # ✅ FIX: error short karo — Telegram 4096 char limit hai
+        err = result.stderr.decode()[-500:]
+        raise Exception(f"FFmpeg error:\n{err}")
 
 
 # ── HANDLERS
