@@ -1,4 +1,5 @@
 import os
+import re
 import textwrap
 from pathlib import Path
 from dotenv import load_dotenv
@@ -19,16 +20,13 @@ from telegram.ext import (
 
 # ── Load env
 load_dotenv()
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-MY_ID = int(os.environ["MY_ID"])
-CLIENT_ID = int(os.environ["CLIENT_ID"])
+BOT_TOKEN  = os.environ["BOT_TOKEN"]
+MY_ID      = int(os.environ["MY_ID"])
+CLIENT_ID  = int(os.environ["CLIENT_ID"])
 CLAUDE_KEY = os.environ["CLAUDE_KEY"]
 
-# ✅ FIX 1: ALLOWED set properly define kiya
-ALLOWED = {MY_ID, CLIENT_ID}
-
-TMP_DIR = "/tmp/videobot"
-# ✅ FIX 2: cookies.txt (Netscape format) use karo, cookies.json nahi
+ALLOWED      = {MY_ID, CLIENT_ID}
+TMP_DIR      = "/tmp/videobot"
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
 os.makedirs(TMP_DIR, exist_ok=True)
 
@@ -61,12 +59,12 @@ def download_video(url, out_dir):
         "outtmpl": os.path.join(out_dir, "input.%(ext)s"),
         "merge_output_format": "mp4",
         "quiet": False,
-        # ✅ FIX 3: Instagram ke liye extra headers
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15",
         },
     }
-    if ("instagram.com" in url or "tiktok.com" in url) and os.path.exists(COOKIES_FILE):
+    # Instagram, TikTok aur YouTube ke liye cookies use karo
+    if os.path.exists(COOKIES_FILE):
         opts["cookiefile"] = COOKIES_FILE
 
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -95,60 +93,105 @@ def get_video_info(video_path):
     return w, h
 
 
-def make_banner(path, w, h, caption=None):
+def crop_black_bars(video_path, out_path):
+    # cropdetect se black bars detect karo
+    result = subprocess.run([
+        "ffmpeg", "-i", video_path,
+        "-vf", "cropdetect=24:16:0",
+        "-frames:v", "60",
+        "-f", "null", "-"
+    ], capture_output=True, text=True)
+
+    crops = re.findall(r"crop=(\d+:\d+:\d+:\d+)", result.stderr)
+
+    if not crops:
+        import shutil
+        shutil.copy(video_path, out_path)
+        return
+
+    best_crop = max(set(crops), key=crops.count)
+    parts = best_crop.split(":")
+    cw = int(parts[0])
+    ch = int(parts[1])
+    cx = parts[2]
+    cy = parts[3]
+
+    # Even numbers ensure karo
+    cw = cw if cw % 2 == 0 else cw - 1
+    ch = ch if ch % 2 == 0 else ch - 1
+
+    result2 = subprocess.run([
+        "ffmpeg", "-y", "-i", video_path,
+        "-vf", f"crop={cw}:{ch}:{cx}:{cy}",
+        "-c:a", "copy",
+        out_path
+    ], capture_output=True)
+
+    if result2.returncode != 0:
+        import shutil
+        shutil.copy(video_path, out_path)
+
+
+def make_caption_banner(path, w, h, text_line):
     img  = Image.new("RGB", (w, h), color=(255, 255, 255))
-    if caption:
-        draw      = ImageDraw.Draw(img)
-        font_size = max(42, w // 17)
+    draw = ImageDraw.Draw(img)
 
-        # ✅ FIX 4: Linux fonts — Noto Color Emoji pehle (color emoji support)
-        font = None
-        for font_path in [
-            "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-            "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-        ]:
-            try:
-                font = ImageFont.truetype(font_path, font_size)
-                break
-            except:
-                continue
-        if font is None:
-            font = ImageFont.load_default()
+    font_size = max(38, w // 18)
+    font = None
+    for fp in [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+    ]:
+        try:
+            font = ImageFont.truetype(fp, font_size)
+            break
+        except:
+            continue
+    if font is None:
+        font = ImageFont.load_default()
 
-        wrapped = textwrap.fill(caption, width=22)
-        bbox    = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=8)
-        tw      = bbox[2] - bbox[0]
-        th      = bbox[3] - bbox[1]
-        tx      = (w - tw) // 2
-        ty      = (h - th) // 2
-        draw.multiline_text((tx, ty), wrapped, fill=(0, 0, 0),
-                            font=font, align="center", spacing=8)
+    wrapped = textwrap.fill(text_line, width=24)
+    bbox    = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=10)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    tx = (w - tw) // 2
+    ty = (h - th) // 2
+
+    draw.multiline_text((tx, ty), wrapped, fill=(0, 0, 0),
+                        font=font, align="center", spacing=10)
+    img.save(path)
+
+
+def make_empty_banner(path, w, h):
+    img = Image.new("RGB", (w, h), color=(255, 255, 255))
     img.save(path)
 
 
 def process_video_file(video_path, caption, out_path):
-    w, h = get_video_info(video_path)
+    # Step 1: Black bars crop
+    cropped_path = os.path.join(TMP_DIR, "cropped.mp4")
+    crop_black_bars(video_path, cropped_path)
 
-    top_h = int(h * 0.22)
-    bot_h = int(h * 0.10)
+    # Step 2: Dimensions
+    w, h = get_video_info(cropped_path)
+    w = w if w % 2 == 0 else w + 1
+    h = h if h % 2 == 0 else h + 1
 
-    # ✅ FIX: width/height even honi chahiye (x264 requirement)
-    w     = w     if w     % 2 == 0 else w + 1
-    h     = h     if h     % 2 == 0 else h + 1
+    # Step 3: Banner heights
+    top_h = int(h * 0.25)
+    bot_h = int(h * 0.08)
     top_h = top_h if top_h % 2 == 0 else top_h + 1
     bot_h = bot_h if bot_h % 2 == 0 else bot_h + 1
 
     top_path = os.path.join(TMP_DIR, "top.png")
     bot_path = os.path.join(TMP_DIR, "bot.png")
 
-    make_banner(top_path, w, top_h, caption=caption)
-    make_banner(bot_path, w, bot_h, caption=None)
+    make_caption_banner(top_path, w, top_h, caption)
+    make_empty_banner(bot_path, w, bot_h)
 
     filter_complex = (
-        f"[0:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
-        f"pad={w}:{h}:-1:-1:color=white,setsar=1[vid];"
+        f"[0:v]scale={w}:{h}:force_original_aspect_ratio=disable,setsar=1[vid];"
         f"[1:v]scale={w}:{top_h}:force_original_aspect_ratio=disable[top];"
         f"[2:v]scale={w}:{bot_h}:force_original_aspect_ratio=disable[bot];"
         f"[top][vid][bot]vstack=inputs=3[out]"
@@ -156,7 +199,7 @@ def process_video_file(video_path, caption, out_path):
 
     result = subprocess.run([
         "ffmpeg", "-y",
-        "-i", video_path,
+        "-i", cropped_path,
         "-i", top_path,
         "-i", bot_path,
         "-filter_complex", filter_complex,
@@ -170,12 +213,9 @@ def process_video_file(video_path, caption, out_path):
     ], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
     if result.returncode != 0:
-        # ✅ FIX: error short karo — Telegram 4096 char limit hai
-        err = result.stderr.decode()[-500:]
+        err = result.stderr.decode()[-600:]
         raise Exception(f"FFmpeg error:\n{err}")
 
-
-# ── HANDLERS
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not allowed(update.effective_user.id):
@@ -185,6 +225,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "📎 YouTube / Instagram / TikTok link bhejo\n\n"
         "✅ AI Caption Auto Rewrite\n"
         "✅ White Background Upar + Neeche\n"
+        "✅ Black Bars Auto Remove\n"
         "✅ 😭 Emoji Auto Add\n\n"
         "_Bas link paste karo!_",
         parse_mode="Markdown"
@@ -253,11 +294,10 @@ async def handle_process(message, ctx, caption_override):
                 original = info.get("description") or info.get("title") or "Amazing video!"
             final_caption = rewrite_caption(original)
 
-        # 😭 emoji end mein add karo agar nahi hai
         if "😭" not in final_caption:
             final_caption = final_caption.rstrip() + " 😭"
 
-        await message.reply_text("🎨 White background + caption add ho raha hai...")
+        await message.reply_text("🎨 Black bars remove + white background + caption add ho raha hai...")
         out_path = os.path.join(TMP_DIR, "output.mp4")
         process_video_file(video_path, final_caption, out_path)
 
@@ -272,7 +312,8 @@ async def handle_process(message, ctx, caption_override):
         await message.reply_text("🎉 Done! Aur link bhejo 🔥")
 
     except Exception as e:
-        await message.reply_text(f"❌ Error aaya:\n`{str(e)}`", parse_mode="Markdown")
+        err_msg = str(e)[:800]
+        await message.reply_text(f"❌ Error aaya:\n`{err_msg}`", parse_mode="Markdown")
 
 
 async def unknown(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
