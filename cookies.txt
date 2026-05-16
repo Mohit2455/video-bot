@@ -1,4 +1,3 @@
-
 # Netscape HTTP Cookie File
 .instagram.com	TRUE	/	TRUE	1813211786	csrftoken	JgYdciajUac5INIKEvmliCDwv5eu76EJ
 .instagram.com	TRUE	/	TRUE	1805269627	datr	euKKaZH0bl4nxzb-oNvkJPLn
