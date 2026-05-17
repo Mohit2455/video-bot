@@ -1,10 +1,12 @@
 import os
 import re
+import textwrap
 from pathlib import Path
 from dotenv import load_dotenv
 import yt_dlp
 import anthropic
 import subprocess
+from PIL import Image, ImageDraw, ImageFont
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -41,13 +43,27 @@ def rewrite_caption(original):
         max_tokens=300,
         messages=[{"role": "user", "content": (
             "Rewrite this social media caption. "
-            "Keep same meaning, topic, language. "
-            "Remove all emojis from output. "
+            "Keep same meaning and language. "
+            "Remove all emojis and hashtags. "
             "Return ONLY the new caption, nothing else.\n\n"
             f"Original: {original}"
         )}]
     )
     return msg.content[0].text.strip()
+
+
+def clean_text(text):
+    text = re.sub(
+        r"[\U00010000-\U0010ffff\U00002702-\U000027B0"
+        r"\U0001f600-\U0001f64f\U0001f300-\U0001f5ff"
+        r"\U0001f680-\U0001f6ff\U0001f1e0-\U0001f1ff"
+        r"\u2640-\u2642\u2600-\u2B55\u200d\u23cf"
+        r"\u23e9\u231a\ufe0f\u3030]+",
+        "", text, flags=re.UNICODE
+    )
+    text = re.sub(r"#\w+", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text or "Amazing Video"
 
 
 def download_video(url, out_dir):
@@ -89,21 +105,34 @@ def get_video_size(video_path):
     return w, h
 
 
-def clean_caption(text):
-    # Emoji hata do
-    text = re.sub(
-        r"[\U00010000-\U0010ffff\U00002702-\U000027B0"
-        r"\U0001f600-\U0001f64f\U0001f300-\U0001f5ff"
-        r"\U0001f680-\U0001f6ff\U0001f1e0-\U0001f1ff"
-        r"\u2640-\u2642\u2600-\u2B55\u200d\u23cf"
-        r"\u23e9\u231a\ufe0f\u3030]+",
-        "", text, flags=re.UNICODE
-    ).strip()
-    # Hashtags hata do
-    text = re.sub(r"#\w+", "", text).strip()
-    # Extra spaces
-    text = re.sub(r"\s+", " ", text).strip()
-    return text or "Amazing Video"
+def make_banner(path, w, h, text=None):
+    img  = Image.new("RGB", (w, h), color=(255, 255, 255))
+    if text:
+        draw = ImageDraw.Draw(img)
+        font_size = max(40, w // 16)
+        font = None
+        for fp in [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        ]:
+            try:
+                font = ImageFont.truetype(fp, font_size)
+                break
+            except:
+                continue
+        if font is None:
+            font = ImageFont.load_default()
+
+        wrapped = textwrap.fill(text, width=20)
+        bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=8)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+        tx = (w - tw) // 2
+        ty = (h - th) // 2
+        draw.multiline_text((tx, ty), wrapped, fill=(0, 0, 0),
+                            font=font, align="center", spacing=8)
+    img.save(path)
 
 
 def process_video(video_path, caption, out_path):
@@ -111,54 +140,31 @@ def process_video(video_path, caption, out_path):
     W = W if W % 2 == 0 else W - 1
     H = H if H % 2 == 0 else H - 1
 
-    plain = clean_caption(caption)
-
-    font_size = max(36, W // 18)
     top_h = int(H * 0.22)
     top_h = top_h if top_h % 2 == 0 else top_h + 1
     bot_h = int(H * 0.08)
     bot_h = bot_h if bot_h % 2 == 0 else bot_h + 1
-    total_h = top_h + H + bot_h
-    total_h = total_h if total_h % 2 == 0 else total_h + 1
 
-    # Text wrap for ffmpeg
-    words = plain.split()
-    lines_list, current = [], ""
-    for word in words:
-        if len(current) + len(word) + 1 <= 22:
-            current = (current + " " + word).strip()
-        else:
-            if current:
-                lines_list.append(current)
-            current = word
-    if current:
-        lines_list.append(current)
-    # ffmpeg drawtext mein \n se newline
-    wrapped = r"\n".join(lines_list[:3])
-    # Single quotes escape karo
-    wrapped = wrapped.replace("'", "")
+    top_path = os.path.join(TMP_DIR, "top.png")
+    bot_path = os.path.join(TMP_DIR, "bot.png")
 
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    if not os.path.exists(font_path):
-        font_path = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+    make_banner(top_path, W, top_h, text=caption)
+    make_banner(bot_path, W, bot_h, text=None)
 
-    # pad filter: video ke upar top_h white + neeche bot_h white add karo
-    # drawtext: upar white area mein center mein text
-    text_y = max(10, (top_h // 2) - (font_size))
-
-    vf = (
-        f"scale={W}:{H}:force_original_aspect_ratio=disable,setsar=1,"
-        f"pad={W}:{total_h}:0:{top_h}:color=white,"
-        f"drawtext=fontfile='{font_path}':"
-        f"text='{wrapped}':"
-        f"fontcolor=black:fontsize={font_size}:"
-        f"x=(w-text_w)/2:y={text_y}:line_spacing=10"
+    filter_complex = (
+        f"[0:v]scale={W}:{H}:force_original_aspect_ratio=disable,setsar=1[vid];"
+        f"[1:v]scale={W}:{top_h}:force_original_aspect_ratio=disable[top];"
+        f"[2:v]scale={W}:{bot_h}:force_original_aspect_ratio=disable[bot];"
+        f"[top][vid][bot]vstack=inputs=3[out]"
     )
 
     result = subprocess.run([
         "ffmpeg", "-y",
         "-i", video_path,
-        "-vf", vf,
+        "-i", top_path,
+        "-i", bot_path,
+        "-filter_complex", filter_complex,
+        "-map", "[out]",
         "-map", "0:a?",
         "-c:a", "copy",
         "-c:v", "libx264",
@@ -179,8 +185,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "👋 *Video Repurpose Bot*\n\n"
         "📎 YouTube / Instagram / TikTok link bhejo\n\n"
         "✅ AI Caption Auto Rewrite\n"
-        "✅ White Background Upar + Neeche\n"
-        "✅ Black Bars White Ho Jayenge\n\n"
+        "✅ White Background Upar + Neeche\n\n"
         "_Bas link paste karo!_",
         parse_mode="Markdown"
     )
@@ -241,13 +246,13 @@ async def handle_process(message, ctx, caption_override):
 
         await message.reply_text("✍️ Caption ready ho raha hai...")
         if caption_override:
-            final_caption = clean_caption(caption_override)
+            final_caption = clean_text(caption_override)
         else:
             with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
                 info     = ydl.extract_info(url, download=False)
                 original = info.get("description") or info.get("title") or "Amazing video"
             final_caption = rewrite_caption(original)
-            final_caption = clean_caption(final_caption)
+            final_caption = clean_text(final_caption)
 
         await message.reply_text("🎨 White background + caption add ho raha hai...")
         out_path = os.path.join(TMP_DIR, "output.mp4")
